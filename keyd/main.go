@@ -14,10 +14,13 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"gopkg.in/yaml.v3"
 	"os"
 	"os/exec"
+	"time"
 	"unsafe"
+
+	"github.com/zooyer/embed/log"
+	"gopkg.in/yaml.v3"
 )
 
 type Hook struct {
@@ -26,9 +29,10 @@ type Hook struct {
 }
 
 type Config struct {
-	Shell  string `yaml:"shell"`
-	Device string `yaml:"device"`
-	Hooks  []Hook `yaml:"hooks"`
+	Shell  string     `yaml:"shell"`
+	Device string     `yaml:"device"`
+	Hooks  []Hook     `yaml:"hooks"`
+	Log    log.Config `yaml:"log"`
 }
 
 type Timeval struct {
@@ -65,30 +69,41 @@ func main() {
 		panic(err)
 	}
 
-	// 3. 判断设备文件是否存在
-	if _, err = os.Stat(config.Device); err != nil {
-		panic(err)
+	// 3. 初始化日志
+	log.Init(&config.Log)
+
+	// 4. 判断设备文件是否存在
+	for {
+		if _, err = os.Stat(config.Device); err != nil {
+			log.ZError("stat", config.Device, "error:", err.Error())
+			time.Sleep(time.Second)
+			continue
+		}
+		break
 	}
 
-	// 4. 建立hook索引
+	// 5. 建立hook索引
 	var index = make(map[string]string)
 	for _, hook := range config.Hooks {
 		index[hook.Key] = hook.Cmd
 	}
 
-	// 5. 打开设备文件(模拟getevent)
+	// 6. 打开设备文件(模拟getevent)
 	file, err := os.Open(config.Device)
 	if err != nil {
-		panic(err)
+		log.ZError("open", config.Device, "error:", err.Error())
+		return
 	}
 	defer file.Close()
 
-	// 6. 读取输入事件并处理
+	// 7. 读取输入事件并处理
 	var msg = make([]byte, 24)
 	for {
 		_, err := file.Read(msg)
 		if err != nil {
-			panic(err)
+			log.ZError("read", config.Device, "error:", err.Error())
+			time.Sleep(time.Second)
+			continue
 		}
 
 		var event InputEvent
@@ -99,6 +114,8 @@ func main() {
 
 		_ = binary.Read(bytes.NewReader(msg), order, &event)
 		var key = fmt.Sprintf("%04x %04x %08x", event.Type, event.Code, event.Value)
+
+		log.ZTrace("key:", key)
 
 		if key == "0000 0000 00000000" {
 			continue

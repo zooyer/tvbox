@@ -3,3 +3,8 @@ device: "/dev/input/event5"
 hooks:
   - key: "0004 0004 000c00f0"
     cmd: "am start com.dangbei.tvlauncher"
+log:
+  enable: true
+  color: true
+  level: "TRACE"
+  output: "/data/zzy/keyd/keyd.log"
