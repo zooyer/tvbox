@@ -1,0 +1,225 @@
+/**
+ * @Author: zzy
+ * @Email: zhangzhongyuan@didiglobal.com
+ * @Description:
+ * @File: main.go
+ * @Package: su
+ * @Version: 1.0.0
+ * @Date: 2022/10/10 09:25
+ */
+
+package main
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"strconv"
+	"strings"
+	"syscall"
+
+	"github.com/zooyer/android/user"
+)
+
+func help() {
+	fmt.Println("usage: su [UID[,GID[,GID2]...]] [COMMAND [ARG...]]")
+	fmt.Println()
+	fmt.Println("Switch to WHO (default 'root') and run the given command (default sh).")
+	fmt.Println()
+	fmt.Println("where WHO is a comma-separated list of user, group,")
+	fmt.Println("and supplementary groups in that order.")
+	fmt.Println()
+}
+
+func help13() {
+	fmt.Println("usage: su [WHO [COMMAND...]]")
+	fmt.Println()
+	fmt.Println("Switch to WHO (default 'root') and run the given COMMAND (default sh).")
+	fmt.Println()
+	fmt.Println("WHO is a comma-separated list of user, group, and supplementary groups")
+	fmt.Println("in that order.")
+	fmt.Println()
+}
+
+func execCommand(cmd string) (output string) {
+	if cmd == "" {
+		return
+	}
+
+	const shell = "/system/bin/sh"
+
+	data, _ := exec.Command(shell, "-c", cmd).CombinedOutput()
+
+	return strings.TrimSpace(string(data))
+}
+
+func errorExit(status int, err error, msg string) {
+	errno, ok := err.(syscall.Errno)
+	if ok && errno != 0 {
+		_, _ = fmt.Fprintln(os.Stderr, errno.Error())
+	}
+
+	_, _ = fmt.Fprintln(os.Stderr, msg)
+	os.Exit(status)
+}
+
+func pwtoid(tok string) (uid, gid int) {
+	if pw := user.Getpwnam(tok); pw != nil {
+		uid, gid = int(pw.UID), int(pw.GID)
+	} else {
+		tid, err := strconv.ParseUint(tok, 10, 32)
+		if err != nil {
+			errorExit(1, err, fmt.Sprintf("invalid uid/gid '%s'", tok))
+		}
+		uid, gid = int(tid), int(tid)
+	}
+
+	return
+}
+
+func pwtoidByIDBinary(name string) (uid, gid int) {
+	output := execCommand(fmt.Sprintf("id -u %s", name))
+	uid, _ = strconv.Atoi(output)
+
+	output = execCommand(fmt.Sprintf("id -g %s", name))
+	gid, _ = strconv.Atoi(output)
+
+	return
+}
+
+func getpwuidNameByIDBinary() string {
+	return execCommand("id -u -n")
+}
+
+func extractUidGids(ids string) (uid, gid int, gids []int) {
+	if ids == "" {
+		return
+	}
+
+	var tok = strings.Split(ids, ",")
+	uid, gid = pwtoid(tok[0])
+	if len(tok) < 2 {
+		// gid is already set above
+		return
+	}
+
+	_, gid = pwtoid(tok[1])
+
+	for i := 2; i < len(tok); i++ {
+		_, gid := pwtoid(tok[i])
+		gids = append(gids, gid)
+	}
+
+	if len(gids) >= 10 {
+		gids = gids[:10]
+		_, _ = fmt.Fprintln(os.Stderr, "too many group ids")
+	}
+
+	return
+}
+
+var paths = [][]string{
+	// Android 11 - 13
+	{"/product/bin", "/apex/com.android.runtime/bin", "/apex/com.android.art/bin", "/system_ext/bin", "/system/bin", "/system/xbin", "/odm/bin", "/vendor/bin", "/vendor/xbin"},
+	// Android 10
+	{"/sbin", "/system/sbin", "/product/bin", "/apex/com.android.runtime/bin", "/system/bin", "/system/xbin", "/odm/bin", "/vendor/bin", "/vendor/xbin"},
+	// Android 9
+	{"/sbin", "/system/sbin", "/system/bin", "/system/xbin", "/odm/bin", "/vendor/bin", "/vendor/xbin"},
+	// Android 8
+	{"/sbin", "/system/sbin", "/system/bin", "/system/xbin", "/vendor/bin", "/vendor/xbin"},
+	// Android 6 - 7
+	{"/sbin", "/vendor/bin", "/system/sbin", "/system/bin", "/system/xbin"},
+	// Android 4 - 5
+	{"/usr/bin", "/bin", "/usr/sbin", "/sbin"},
+}
+
+func defPath() string {
+	var matched = make(map[string]bool)
+	for _, path := range paths {
+		var match = true
+		for _, folder := range path {
+			if _, err := os.Stat(folder); err != nil {
+				match = false
+			} else {
+				matched[folder] = true
+			}
+		}
+		if match {
+			return strings.Join(path, ":")
+		}
+	}
+
+	var list = make([]string, 0, len(matched))
+	for path := range matched {
+		list = append(list, path)
+	}
+
+	return strings.Join(list, ":")
+}
+
+func main() {
+	var (
+		err        error
+		currentUid = os.Getuid()
+	)
+
+	if currentUid != user.AidRoot && currentUid != user.AidShell {
+		errorExit(1, nil, "not allowed")
+	}
+
+	// Handle -h and --help.
+	if len(os.Args) > 1 && (os.Args[1] == "--help" || os.Args[1] == "-h") {
+		help13()
+		return
+	}
+
+	// The default user is root.
+	var uid, gid = 0, 0
+
+	// If there are any arguments, the first argument is the uid/gid/supplementary groups.
+	if count := len(os.Args); count > 1 {
+		var gids = make([]int, count)
+		uid, gid, gids = extractUidGids(os.Args[1])
+		if len(gids) > 0 {
+			if err = syscall.Setgroups(gids); err != nil {
+				errorExit(1, err, "setgroups failed")
+			}
+		}
+	}
+
+	if err = syscall.Setgid(gid); err != nil {
+		errorExit(1, err, "setgid failed")
+	}
+
+	if err = syscall.Setuid(uid); err != nil {
+		errorExit(1, err, "setuid failed")
+	}
+
+	// Reset parts of the environment.
+	_ = os.Setenv("PATH", defPath())
+	_ = os.Unsetenv("IFS")
+	if pw := user.Getpwuid(uint32(uid)); pw != nil {
+		_ = os.Setenv("LOGNAME", pw.Name)
+		_ = os.Setenv("USER", pw.Name)
+	} else {
+		_ = os.Unsetenv("LOGNAME")
+		_ = os.Unsetenv("USER")
+	}
+
+	// Set up the arguments for exec.
+	var execArgs = make([]string, 0, len(os.Args)+1)
+	if len(os.Args) > 2 {
+		for _, arg := range os.Args[2:] {
+			execArgs = append(execArgs, arg)
+		}
+	}
+
+	// Default to the standard shell.
+	if len(execArgs) == 0 {
+		execArgs = append(execArgs, "/system/bin/sh")
+	}
+
+	if err = syscall.Exec(execArgs[0], execArgs, os.Environ()); err != nil {
+		errorExit(1, err, fmt.Sprintf("failed to exec %s", execArgs[0]))
+	}
+}

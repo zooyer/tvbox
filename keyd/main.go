@@ -56,6 +56,18 @@ func IsLittleEndian() bool {
 	return b == 0x04
 }
 
+func execCommand(shell, cmd string) {
+	if cmd == "" {
+		return
+	}
+
+	if shell == "" {
+		shell = "/system/bin/sh"
+	}
+
+	_ = exec.Command(shell, "-c", cmd).Run()
+}
+
 func main() {
 	// 1. 读取配置文件
 	data, err := os.ReadFile("./keyd.yaml")
@@ -122,19 +134,7 @@ func main() {
 		}
 
 		if cmd := index[key]; cmd != "" {
-			execCommand(config.Shell, cmd)
+			go execCommand(config.Shell, cmd)
 		}
 	}
-}
-
-func execCommand(shell, cmd string) {
-	if cmd == "" {
-		return
-	}
-
-	if shell == "" {
-		shell = "/system/bin/sh"
-	}
-
-	_ = exec.Command(shell, "-c", cmd).Start()
 }
