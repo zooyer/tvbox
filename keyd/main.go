@@ -13,9 +13,12 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
+	"github.com/zooyer/tvbox/keyd/input"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 	"unsafe"
 
@@ -29,10 +32,10 @@ type Hook struct {
 }
 
 type Config struct {
-	Shell  string     `yaml:"shell"`
-	Device string     `yaml:"device"`
-	Hooks  []Hook     `yaml:"hooks"`
-	Log    log.Config `yaml:"log"`
+	Shell string     `yaml:"shell"`
+	Sysfs string     `yaml:"sysfs"`
+	Hooks []Hook     `yaml:"hooks"`
+	Log   log.Config `yaml:"log"`
 }
 
 type Timeval struct {
@@ -65,7 +68,13 @@ func execCommand(shell, cmd string) {
 		shell = "/system/bin/sh"
 	}
 
+	log.ZTrace("exec command:", shell, "-c", cmd)
 	_ = exec.Command(shell, "-c", cmd).Run()
+}
+
+func marshalJSON(v interface{}) string {
+	data, _ := json.Marshal(v)
+	return string(data)
 }
 
 func main() {
@@ -84,57 +93,95 @@ func main() {
 	// 3. 初始化日志
 	log.Init(&config.Log)
 
-	// 4. 判断设备文件是否存在
 	for {
-		if _, err = os.Stat(config.Device); err != nil {
-			log.ZError("stat", config.Device, "error:", err.Error())
-			time.Sleep(time.Second)
-			continue
-		}
-		break
-	}
-
-	// 5. 建立hook索引
-	var index = make(map[string]string)
-	for _, hook := range config.Hooks {
-		index[hook.Key] = hook.Cmd
-	}
-
-	// 6. 打开设备文件(模拟getevent)
-	file, err := os.Open(config.Device)
-	if err != nil {
-		log.ZError("open", config.Device, "error:", err.Error())
-		return
-	}
-	defer file.Close()
-
-	// 7. 读取输入事件并处理
-	var msg = make([]byte, 24)
-	for {
-		_, err := file.Read(msg)
+		// 4. 读取input驱动文件
+		devices, err := input.ReadInputDevices()
 		if err != nil {
-			log.ZError("read", config.Device, "error:", err.Error())
+			log.ZError("read input devices error:", err.Error())
 			time.Sleep(time.Second)
 			continue
 		}
+		log.ZTrace("read input devices:", marshalJSON(devices))
 
-		var event InputEvent
-		var order binary.ByteOrder = binary.BigEndian
-		if IsLittleEndian() {
-			order = binary.LittleEndian
+		// 5. 获取event
+		var event string
+		for _, dev := range devices {
+			if dev.Sysfs == config.Sysfs {
+				var find bool
+				for _, ev := range strings.Fields(dev.Handlers) {
+					if strings.HasPrefix(ev, "event") {
+						find = true
+						event = ev
+					}
+				}
+				if find {
+					break
+				}
+			}
 		}
-
-		_ = binary.Read(bytes.NewReader(msg), order, &event)
-		var key = fmt.Sprintf("%04x %04x %08x", event.Type, event.Code, event.Value)
-
-		log.ZTrace("key:", key)
-
-		if key == "0000 0000 00000000" {
+		if event == "" {
+			log.ZWarn("not found input event device")
+			time.Sleep(time.Second)
 			continue
 		}
+		log.ZTrace("input event:", event)
 
-		if cmd := index[key]; cmd != "" {
-			go execCommand(config.Shell, cmd)
+		// 6. 判断设备文件是否存在
+		var device = "/dev/input/" + event
+		for {
+			if _, err = os.Stat(device); err != nil {
+				log.ZError("stat", device, "error:", err.Error())
+				time.Sleep(time.Second)
+				continue
+			}
+			break
+		}
+		log.ZTrace("device", device, "exists")
+
+		// 7. 建立hook索引
+		var index = make(map[string]string)
+		for _, hook := range config.Hooks {
+			index[hook.Key] = hook.Cmd
+		}
+
+		// 8. 打开设备文件(模拟getevent)
+		file, err := os.Open(device)
+		if err != nil {
+			log.ZError("open", device, "error:", err.Error())
+			time.Sleep(time.Second)
+			continue
+		}
+		log.ZTrace("open file", device)
+
+		// 9. 读取输入事件并处理
+		var msg = make([]byte, 24)
+		for {
+			_, err := file.Read(msg)
+			if err != nil {
+				log.ZError("read", device, "error:", err.Error())
+				file.Close()
+				time.Sleep(time.Second)
+				break
+			}
+
+			var event InputEvent
+			var order binary.ByteOrder = binary.BigEndian
+			if IsLittleEndian() {
+				order = binary.LittleEndian
+			}
+
+			_ = binary.Read(bytes.NewReader(msg), order, &event)
+			var key = fmt.Sprintf("%04x %04x %08x", event.Type, event.Code, event.Value)
+
+			log.ZTrace("key:", key)
+
+			if key == "0000 0000 00000000" {
+				continue
+			}
+
+			if cmd := index[key]; cmd != "" {
+				go execCommand(config.Shell, cmd)
+			}
 		}
 	}
 }
