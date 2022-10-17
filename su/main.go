@@ -22,7 +22,7 @@ import (
 )
 
 func help() {
-	fmt.Println("usage: su [UID[,GID[,GID2]...]] [COMMAND [ARG...]]")
+	fmt.Println("usage: su [--path,-p] [UID[,GID[,GID2]...]] [COMMAND [ARG...]]")
 	fmt.Println()
 	fmt.Println("Switch to WHO (default 'root') and run the given command (default sh).")
 	fmt.Println()
@@ -32,7 +32,7 @@ func help() {
 }
 
 func help13() {
-	fmt.Println("usage: su [WHO [COMMAND...]]")
+	fmt.Println("usage: su [--path,-p] [WHO [COMMAND...]]")
 	fmt.Println()
 	fmt.Println("Switch to WHO (default 'root') and run the given COMMAND (default sh).")
 	fmt.Println()
@@ -161,30 +161,40 @@ func main() {
 	var (
 		err        error
 		currentUid = os.Getuid()
+		args       = os.Args[1:]
 	)
 
 	if currentUid != user.AidRoot && currentUid != user.AidShell {
 		errorExit(1, nil, "not allowed")
 	}
 
+	var (
+		path     bool   // The inherits parent process path env.
+		uid, gid = 0, 0 // The default user is root.
+	)
+
 	// Handle -h and --help.
-	if len(os.Args) > 1 && (os.Args[1] == "--help" || os.Args[1] == "-h") {
+	if len(args) > 0 && (args[0] == "--help" || args[0] == "-h") {
 		help13()
 		return
 	}
 
-	// The default user is root.
-	var uid, gid = 0, 0
+	// Handle -p and --path.
+	if len(args) > 0 && (args[0] == "--path" || args[0] == "-p") {
+		path = true
+		args = args[1:]
+	}
 
 	// If there are any arguments, the first argument is the uid/gid/supplementary groups.
-	if count := len(os.Args); count > 1 {
-		var gids = make([]int, count)
-		uid, gid, gids = extractUidGids(os.Args[1])
+	if len(args) > 0 {
+		var gids []int
+		uid, gid, gids = extractUidGids(args[0])
 		if len(gids) > 0 {
 			if err = syscall.Setgroups(gids); err != nil {
 				errorExit(1, err, "setgroups failed")
 			}
 		}
+		args = args[1:]
 	}
 
 	if err = syscall.Setgid(gid); err != nil {
@@ -196,7 +206,9 @@ func main() {
 	}
 
 	// Reset parts of the environment.
-	_ = os.Setenv("PATH", defPath())
+	if !path {
+		_ = os.Setenv("PATH", defPath())
+	}
 	_ = os.Unsetenv("IFS")
 	if pw := user.Getpwuid(uint32(uid)); pw != nil {
 		_ = os.Setenv("LOGNAME", pw.Name)
@@ -207,11 +219,9 @@ func main() {
 	}
 
 	// Set up the arguments for exec.
-	var execArgs = make([]string, 0, len(os.Args)+1)
-	if len(os.Args) > 2 {
-		for _, arg := range os.Args[2:] {
-			execArgs = append(execArgs, arg)
-		}
+	var execArgs = make([]string, 0, len(args)+1)
+	for _, arg := range args {
+		execArgs = append(execArgs, arg)
 	}
 
 	// Default to the standard shell.
