@@ -1,5 +1,5 @@
 shell: "/system/bin/sh"
-sysfs: "/devices/meson_remote.11/input/input0"
+sysfs: "/devices/virtual/misc/uhid/0005:0416:0300.0001/input/input5"
 hooks:
   - key: "0004 0004 000c00f0"
     cmd: "am start com.dangbei.tvlauncher"
