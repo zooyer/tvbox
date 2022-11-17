@@ -15,7 +15,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"github.com/zooyer/tvbox/keyd/input"
 	"os"
 	"os/exec"
 	"strings"
@@ -23,6 +22,7 @@ import (
 	"unsafe"
 
 	"github.com/zooyer/embed/log"
+	"github.com/zooyer/tvbox/keyd/input"
 	"gopkg.in/yaml.v3"
 )
 
