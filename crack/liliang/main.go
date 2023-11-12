@@ -10,7 +10,11 @@
 
 package main
 
-import "github.com/gin-gonic/gin"
+import (
+	"fmt"
+	"github.com/gin-gonic/gin"
+	"github.com/zooyer/miskit/dns"
+)
 
 // M310H
 // 型号：新魔百和M310H
@@ -22,6 +26,22 @@ func M310H() {
 	engine.Run(":18082")
 }
 
+// CM311
+// 破解方式：
+// 默认dns是本机，先启动本程序，然后开启网络共享（默认也会启动dns服务，先启动本程序的dns让盒子解析缓存）
+// mac设置，共享 -> 互联网共享 -> 点击? -> 设置来源WIFI，共享给USB LAN -> 开启
+func CM311() {
+	engine := gin.Default()
+	// 让盒子的dns缓存上该域名
+	// update.bja.bcs.ottcn.com
+	if err := dns.HookHostsByLocal("update.bja.bcs.ottcn.com"); err != nil {
+		fmt.Println(err)
+	}
+	engine.StaticFile("/upgrade/nams/app/1280/1652856577076WechatService-Beijing-V1.3.5.5.22.05.12-release-ac2fa71.apk", "/Users/zhangzhongyuan/Downloads/当贝市场.apk")
+	engine.Run(":80")
+}
+
 func main() {
-	M310H()
+	//M310H()
+	CM311()
 }
